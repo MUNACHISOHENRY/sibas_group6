@@ -1,0 +1,47 @@
+# ---- Secrets / credentials (NEVER commit) ----
+.env
+*.env
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- Virtual environments ----
+venv/
+env/
+.venv/
+ENV/
+
+# ---- Streamlit ----
+.streamlit/
+# (keep .streamlit/config.toml if you add shared UI config — un-ignore it explicitly:)
+# !.streamlit/config.toml
+
+# ---- IDE / editor ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ---- Test / data artifacts ----
+*.log
+*.tmp
+# Sample CSVs used for testing are fine to commit; real student data is not.
+# If any real data lands in data/, add it here explicitly.
+
+# ---- Jupyter (if anyone uses notebooks for testing) ----
+.ipynb_checkpoints/
+
+# ---- Database dumps ----
+*.sql.bak
+*.dump
