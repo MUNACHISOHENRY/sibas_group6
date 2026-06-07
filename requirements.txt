@@ -1,0 +1,9 @@
+# SIBAS project dependencies
+# Install with:  pip install -r requirements.txt
+
+streamlit            # frontend (the web app)
+psycopg2-binary      # PostgreSQL driver (import name is still "psycopg2")
+python-dotenv        # loads DB credentials from the .env file
+pandas               # reading/handling CSV uploads
+bcrypt               # hashing passwords (never store plain passwords)
+fpdf2                # exporting reports to PDF
