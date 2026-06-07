@@ -2,7 +2,7 @@ import streamlit as st
 
 # Dummy backend – will be replaced by real imports later
 import streamlit as st
-from app.auth_wrapper import authenticate      # real authentication now
+from backend import authenticate
 
 def login_section():
     c1,c2,c3 = st.columns([1,1.2,1])

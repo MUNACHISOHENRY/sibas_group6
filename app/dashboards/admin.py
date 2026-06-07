@@ -1,16 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from backend import *
 
-# Dummy backend – replace with real imports later
-from app.auth_wrapper import get_all_users, create_user, deactivate_user, delete_user
-
-# Temporary: keep dummy functions for attendance/reports until those modules exist
-from backend import (
-    get_all_lecturers, get_all_courses, register_student, bulk_register_students,
-    add_course, get_lecturer_assignments, assign_lecturer,
-    generate_report, get_threshold, update_threshold, export_csv
-)
 
 def require_role(*roles):
     if "role" not in st.session_state or st.session_state.role not in roles:

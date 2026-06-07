@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-
-# Dummy backend – replace with real imports later
 from backend import *
 
 def require_role(*roles):
