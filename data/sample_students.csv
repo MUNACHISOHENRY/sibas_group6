@@ -1,0 +1,6 @@
+matric_no,full_name,email,programme,level,username,password,courses
+CSC/2023/001,Jane Doe,jane.doe@pau.edu.ng,BSc Computer Science,300,jane.doe,Pass123!,DTS304;CSC310
+CSC/2023/002,John Smith,john.smith@pau.edu.ng,BSc Computer Science,300,john.smith,Pass123!,DTS304
+CSC/2023/003,Amaka Okeke,amaka.okeke@pau.edu.ng,BSc Computer Science,300,amaka.okeke,Pass123!,DTS304;CSC310
+CSC/2023/004,Ibrahim Musa,ibrahim.musa@pau.edu.ng,BSc Computer Science,200,ibrahim.musa,Pass123!,CSC310
+CSC/2023/005,Chioma Eze,chioma.eze@pau.edu.ng,BSc Computer Science,400,chioma.eze,Pass123!,DTS304;CSC310
