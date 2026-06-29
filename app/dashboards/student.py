@@ -44,19 +44,31 @@ def student_dashboard():
     for course in attendance:
         total = course["total"]
         present = course["present"]
-        pct = (present/total)*100 if total>0 else 100
-        eligible = pct >= threshold
 
         with st.container(border=True):
             st.subheader(course["course_code"])
             st.write(course["title"])
-            st.progress(pct/100)
 
-            a,b = st.columns(2)
-            a.metric("Attendance", f"{pct:.1f}%")
-            b.metric("Sessions", f'{course["present"]}/{course["total"]}')
-
-            if eligible:
-                st.success("Eligible for Examination")
+            # When the course has no sessions yet (e.g. start of term), the
+            # attendance formula (present/total) is undefined. We do NOT
+            # show a percentage or an eligibility badge -- showing "100%
+            # Eligible" for a student who has literally never attended
+            # would be misleading. We surface "No sessions held yet"
+            # instead. This matches how the admin report shows N/A.
+            if total == 0:
+                a, b = st.columns(2)
+                a.metric("Attendance", "—")
+                b.metric("Sessions", "0/0")
+                st.info("No sessions held yet")
             else:
-                st.error("Attendance Below Threshold")
+                pct = (present / total) * 100
+                eligible = pct >= threshold
+
+                st.progress(pct / 100)
+                a, b = st.columns(2)
+                a.metric("Attendance", f"{pct:.1f}%")
+                b.metric("Sessions", f"{present}/{total}")
+                if eligible:
+                    st.success("Eligible for Examination")
+                else:
+                    st.error("Attendance Below Threshold")

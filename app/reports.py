@@ -337,18 +337,24 @@ def generate_report(
     for r in rows:
         total = int(r["total_sessions"])
         present = int(r["sessions_present"])
-        # Edge case: a course with no sessions yet (e.g. start of term).
-        # A student who has had no chance to miss class is NOT ineligible,
-        # so we report 100%. This matches the student dashboard's rule and
-        # avoids the day-1-of-semester case where every student would
-        # otherwise be flagged.
-        pct = (present / total * 100) if total > 0 else 100.0
         r["total_sessions"] = total
         r["sessions_present"] = present
-        r["attendance_percent"] = round(pct, 2)
-        # Both keys are present so either dashboard works without reshaping.
-        r["eligible"] = "Yes" if pct >= threshold else "No"
-        r["status"] = "Eligible" if pct >= threshold else "Ineligible"
+
+        if total > 0:
+            pct = present / total * 100
+            r["attendance_percent"] = round(pct, 2)
+            # Both keys are present so either dashboard works without reshaping.
+            r["eligible"] = "Yes" if pct >= threshold else "No"
+            r["status"] = "Eligible" if pct >= threshold else "Ineligible"
+        else:
+            # No sessions held yet -> attendance score is undefined.
+            # We do NOT flag the student as Eligible OR Ineligible because
+            # the brief's formula has no defined value at total=0. Showing
+            # N/A is honest and matches the student dashboard's behaviour
+            # for the same case.
+            r["attendance_percent"] = None
+            r["eligible"] = "N/A"
+            r["status"] = "N/A"
 
     return rows
 

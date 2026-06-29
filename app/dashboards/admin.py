@@ -12,6 +12,9 @@ import plotly.express as px
 from app.api import (
     get_all_users, create_user, deactivate_user, delete_user,
     reset_user_password, update_user_role, reactivate_user, rename_user,
+    get_user_profile_full,
+    update_student_profile, update_lecturer_profile, update_administrator_profile,
+    update_student_courses,
 )
 from app.admin_ops import (
     get_all_lecturers, get_all_courses,
@@ -64,28 +67,83 @@ def admin_dashboard():
 def manage_users(users):
     """
     Admin user management. Implements the full brief contract:
-    create, update, deactivate, delete. "Update" is a single expander
-    with an action dropdown so all four kinds of user edits share one
-    visible control instead of cluttering the sidebar.
+    create, update, deactivate, delete.
+
+    Two ways to pick a user:
+      1. Per-row Edit/Deactivate/Delete buttons on the user table.
+      2. A searchable user dropdown inside the "Update User" expander.
+    Clicking a row's Edit button auto-selects that user in the dropdown.
+    The dropdown's "Edit profile" action opens a role-aware sub-form so
+    admins can update student/lecturer/admin profile fields directly.
     """
     st.subheader("User Management")
+
+    # --- Search + filterable table with per-row actions ---
     search = st.text_input("Search User")
-    filtered = [u for u in users if search.lower() in u["username"].lower()] if search else users
-    st.dataframe(pd.DataFrame(filtered), use_container_width=True)
+    filtered = (
+        [u for u in users if search.lower() in u["username"].lower()]
+        if search else users
+    )
 
-    col_a, col_b, col_c = st.columns(3)
+    if filtered:
+        # Header row.
+        h = st.columns([1, 2, 2, 1, 3])
+        for col, label in zip(h, ["ID", "Username", "Role", "Active", "Actions"]):
+            col.markdown(f"**{label}**")
 
-    # --- Create ---
+        # One row per user with inline Edit / Deactivate / Delete buttons.
+        # Buttons set st.session_state["selected_user_id"] so the Update
+        # User dropdown below pre-selects the same person.
+        for u in filtered:
+            row = st.columns([1, 2, 2, 1, 1, 1, 1])
+            row[0].write(u["user_id"])
+            row[1].write(u["username"])
+            row[2].write(u["role"])
+            row[3].write("✓" if u["is_active"] else "✗")
+
+            if row[4].button("Edit", key=f"edit_btn_{u['user_id']}"):
+                st.session_state["selected_user_id"] = u["user_id"]
+                st.session_state["upd_action"] = "Edit profile"
+                st.rerun()
+
+            if row[5].button("Deactivate", key=f"deac_btn_{u['user_id']}"):
+                try:
+                    deactivate_user(u["user_id"])
+                    st.success(f"Deactivated #{u['user_id']}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            if row[6].button("Delete", key=f"del_btn_{u['user_id']}"):
+                try:
+                    delete_user(u["user_id"])
+                    st.success(f"Deleted #{u['user_id']}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+    else:
+        st.info("No users match that search.")
+
+    st.divider()
+
+    col_a, col_b = st.columns(2)
+
+    # --- Create New User (Administrator / Lecturer only) ---
     with col_a:
         with st.expander("Create New User"):
             with st.form("create_user"):
                 new_username  = st.text_input("Username")
                 new_password  = st.text_input("Password", type="password")
-                new_role      = st.selectbox("Role", ["Administrator", "Lecturer", "Student"])
+                # Student creation is intentionally NOT offered here. Students
+                # require matric_no, programme, level and course enrolment --
+                # the Students tab is the single, transactional path for that
+                # (Script 2). Creating a half-registered Student row here
+                # would leave the account unable to log in cleanly.
+                new_role      = st.selectbox("Role", ["Administrator", "Lecturer"])
                 new_full_name = st.text_input("Full Name", help="Required for Lecturer accounts")
                 new_email     = st.text_input("Email",     help="Required for Lecturer accounts")
                 new_active    = st.checkbox("Active", value=True)
-                st.caption("To register a Student with full details (matric no., programme, courses), use the **Students** tab instead.")
+                st.caption("To register a **Student** use the **Students** tab — it captures matric no., programme, and courses in one transaction.")
                 if st.form_submit_button("Create"):
                     try:
                         create_user(
@@ -94,61 +152,229 @@ def manage_users(users):
                             email=new_email or None,
                         )
                         st.success("User created")
+                        st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
-    # --- Update (single expander, action-routed) ---
+    # --- Update User (searchable dropdown, action-routed) ---
     with col_b:
-        with st.expander("Update User"):
-            with st.form("update_user"):
-                target_id = st.number_input("User ID", min_value=1, step=1, key="upd_id")
+        with st.expander(
+            "Update User",
+            expanded=("selected_user_id" in st.session_state),
+        ):
+            if not users:
+                st.info("No users yet.")
+            else:
+                # Searchable dropdown. Streamlit's selectbox lets the user
+                # type to filter the options live -- much friendlier than
+                # the old User ID number input.
+                #
+                # IMPORTANT: we do NOT pass a `key` to this selectbox. With
+                # a key Streamlit ties the widget to its own session_state
+                # slot and ignores `index` on subsequent renders -- which
+                # means clicking a row's Edit button (which writes to
+                # `selected_user_id`) would update our tracking var but
+                # leave the dropdown stuck on the previous user, and the
+                # form would render data for a *different* user than the
+                # dropdown displays. Driving selection purely by `index`
+                # keeps the dropdown and the form in lockstep.
+                user_options = {
+                    u["user_id"]: f"{u['username']} (#{u['user_id']}) — {u['role']}"
+                    for u in users
+                }
+                ids = list(user_options.keys())
+
+                sel = st.session_state.get("selected_user_id")
+                pre_idx = ids.index(sel) if sel in ids else 0
+
+                target_id = st.selectbox(
+                    "User",
+                    options=ids,
+                    format_func=lambda x: user_options[x],
+                    index=pre_idx,
+                )
+                # Single source of truth for the next render.
+                st.session_state["selected_user_id"] = target_id
+
                 action = st.selectbox(
                     "Action",
-                    ["Reset password", "Change role", "Reactivate", "Rename username"],
+                    ["Edit profile", "Reset password", "Change role",
+                     "Reactivate", "Rename username"],
+                    key="upd_action",
                 )
-                # Only show the input field relevant to the chosen action.
-                new_password = ""
-                new_role = "Student"
-                new_username = ""
-                if action == "Reset password":
-                    new_password = st.text_input("New password", type="password",
-                                                 help="Minimum 6 characters")
+
+                if action == "Edit profile":
+                    _edit_profile_form(int(target_id))
+
+                elif action == "Reset password":
+                    with st.form("reset_pw_form"):
+                        new_password = st.text_input(
+                            "New password", type="password",
+                            help="Minimum 6 characters",
+                        )
+                        if st.form_submit_button("Apply"):
+                            try:
+                                reset_user_password(int(target_id), new_password)
+                                st.success("Password reset")
+                            except Exception as e:
+                                st.error(str(e))
+
                 elif action == "Change role":
-                    new_role = st.selectbox(
-                        "New role", ["Administrator", "Lecturer", "Student"],
-                        key="upd_role",
-                    )
-                elif action == "Rename username":
-                    new_username = st.text_input("New username")
-                # Reactivate needs no extra input.
+                    with st.form("change_role_form"):
+                        new_role = st.selectbox(
+                            "New role",
+                            ["Administrator", "Lecturer", "Student"],
+                            key="upd_new_role",
+                        )
+                        st.caption(
+                            "Changing role only flips the role flag on the "
+                            "account. It does NOT move profile data between "
+                            "the student/lecturer/administrator tables."
+                        )
+                        if st.form_submit_button("Apply"):
+                            try:
+                                update_user_role(int(target_id), new_role)
+                                st.success("Role updated")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(str(e))
 
-                if st.form_submit_button("Apply"):
-                    try:
-                        if action == "Reset password":
-                            reset_user_password(int(target_id), new_password)
-                        elif action == "Change role":
-                            update_user_role(int(target_id), new_role)
-                        elif action == "Reactivate":
+                elif action == "Reactivate":
+                    st.caption("Flip an inactive account back to active.")
+                    if st.button("Reactivate user", key="reactivate_btn"):
+                        try:
                             reactivate_user(int(target_id))
-                        elif action == "Rename username":
-                            rename_user(int(target_id), new_username)
-                        st.success(f"{action} applied to user {int(target_id)}")
-                    except Exception as e:
-                        st.error(str(e))
+                            st.success("Reactivated")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
 
-    # --- Deactivate / Delete ---
-    with col_c:
-        with st.expander("Deactivate / Delete"):
-            user_id = st.number_input("User ID", min_value=1, step=1, key="del_id")
-            d, dl = st.columns(2)
-            with d:
-                if st.button("Deactivate"):
-                    deactivate_user(int(user_id))
-                    st.success("Deactivated")
-            with dl:
-                if st.button("Delete"):
-                    delete_user(int(user_id))
-                    st.success("Deleted")
+                elif action == "Rename username":
+                    with st.form("rename_form"):
+                        new_username = st.text_input("New username")
+                        if st.form_submit_button("Apply"):
+                            try:
+                                rename_user(int(target_id), new_username)
+                                st.success("Renamed")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(str(e))
+
+
+def _edit_profile_form(user_id):
+    """
+    Role-aware profile editor. Pulls the current values via
+    get_user_profile_full so all fields are pre-populated, then shows
+    only the fields that apply to that role.
+        Student  : full_name, email, level, programme, course enrolments
+        Lecturer : full_name, email
+        Admin    : full_name, email
+    """
+    profile = get_user_profile_full(user_id)
+    if profile is None:
+        st.error("User not found.")
+        return
+
+    if profile.get("profile_missing"):
+        st.warning(
+            f"This {profile['role']} account has no profile row in the "
+            f"{profile['role'].lower()} table yet, so there's nothing to edit. "
+            "Use the relevant tab (Students for students; Users → Create for lecturers) "
+            "to create the profile, or delete and recreate the account."
+        )
+        return
+
+    role = profile["role"]
+
+    if role == "Student":
+        # Form key includes user_id so switching users in the dropdown
+        # creates a fresh widget tree -- otherwise Streamlit would reuse
+        # the previous student's typed values instead of pre-filling
+        # from the new student's profile.
+        with st.form(f"edit_student_profile_{user_id}"):
+            st.caption(f"Editing student **{profile['matric_no']}** (matric no. is not editable).")
+            full_name = st.text_input("Full Name", value=profile.get("full_name", ""))
+            email     = st.text_input("Email",     value=profile.get("email", ""))
+
+            levels = [100, 200, 300, 400, 500]
+            cur_level = profile.get("level", 100)
+            level = st.selectbox(
+                "Level", levels,
+                index=levels.index(cur_level) if cur_level in levels else 0,
+            )
+
+            programmes = get_all_programmes()
+            prog_names = [p["programme_name"] for p in programmes]
+            cur_prog = profile.get("programme_name", "")
+            prog_idx = prog_names.index(cur_prog) if cur_prog in prog_names else 0
+            programme = (
+                st.selectbox("Programme", prog_names, index=prog_idx)
+                if prog_names else ""
+            )
+
+            all_courses = get_all_courses()
+            all_codes = [c["course_code"] for c in all_courses]
+            cur_codes = profile.get("course_codes", [])
+            selected_codes = st.multiselect(
+                "Courses",
+                options=all_codes,
+                default=[c for c in cur_codes if c in all_codes],
+                format_func=lambda x: next(
+                    (f'{c["course_code"]} - {c["course_title"]}'
+                     for c in all_courses if c["course_code"] == x),
+                    x,
+                ),
+            )
+
+            if st.form_submit_button("Save"):
+                try:
+                    update_student_profile(
+                        profile["student_id"],
+                        full_name=full_name,
+                        email=email,
+                        level=level,
+                        programme_name=programme or None,
+                    )
+                    summary = update_student_courses(
+                        profile["student_id"], selected_codes,
+                    )
+                    st.success(
+                        f"Profile saved (+{summary['added']} / "
+                        f"−{summary['removed']} courses)"
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+    elif role == "Lecturer":
+        with st.form(f"edit_lecturer_profile_{user_id}"):
+            full_name = st.text_input("Full Name", value=profile.get("full_name", ""))
+            email     = st.text_input("Email",     value=profile.get("email", ""))
+            if st.form_submit_button("Save"):
+                try:
+                    update_lecturer_profile(
+                        profile["lecturer_id"],
+                        full_name=full_name, email=email,
+                    )
+                    st.success("Profile saved")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+    else:  # Administrator
+        with st.form(f"edit_admin_profile_{user_id}"):
+            full_name = st.text_input("Full Name", value=profile.get("full_name", ""))
+            email     = st.text_input("Email",     value=profile.get("email", ""))
+            if st.form_submit_button("Save"):
+                try:
+                    update_administrator_profile(
+                        profile["admin_id"],
+                        full_name=full_name, email=email,
+                    )
+                    st.success("Profile saved")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
 
 def manage_students():
     """
@@ -200,20 +426,44 @@ def manage_students():
             )
 
             if st.form_submit_button("Register Student"):
-                result = register_student(
-                    matric_no      = matric_no,
-                    full_name      = full_name,
-                    email          = email,
-                    programme_name = programme,
-                    level          = level,
-                    username       = username,
-                    password       = password,
-                    course_codes   = selected_codes,
-                )
-                if result.get("ok"):
-                    st.success(f"Student registered (id={result['student_id']})")
+                # Pre-check duplicate username so we can show a clear,
+                # human-readable message instead of letting the raw
+                # PostgreSQL UNIQUE-violation text reach the UI.
+                from app.db import run_query_one
+                existing = run_query_one(
+                    "SELECT user_id FROM app_user WHERE username = %s",
+                    (username.strip(),),
+                ) if username and username.strip() else None
+
+                if existing:
+                    st.error(
+                        f"Username '{username}' is already taken. "
+                        "Pick a different one, or have the admin delete the "
+                        "existing user from the Users tab first."
+                    )
                 else:
-                    st.error(result.get("error", "Registration failed"))
+                    result = register_student(
+                        matric_no      = matric_no,
+                        full_name      = full_name,
+                        email          = email,
+                        programme_name = programme,
+                        level          = level,
+                        username       = username,
+                        password       = password,
+                        course_codes   = selected_codes,
+                    )
+                    if result.get("ok"):
+                        st.success(f"Student registered (id={result['student_id']})")
+                    else:
+                        # Translate the most common PG error text the user
+                        # would otherwise see verbatim.
+                        err = result.get("error", "Registration failed")
+                        if "duplicate key" in err.lower() and "matric" in err.lower():
+                            st.error(f"Matric number '{matric_no}' is already in use.")
+                        elif "duplicate key" in err.lower() and "email" in err.lower():
+                            st.error(f"Email '{email}' is already in use.")
+                        else:
+                            st.error(err)
 
     # --------------------------------------------------------------
     # Bulk CSV registration -- one row per student
