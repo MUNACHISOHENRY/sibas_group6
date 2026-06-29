@@ -75,9 +75,21 @@ def _hash_password(plain_password: str) -> str:
 
 
 def _lookup_programme_id(cur, programme_name: str):
-    """Return programme_id for a given programme name, or None if not found."""
+    """
+    Return programme_id for a given programme name, or None if not found.
+    Tries exact match first, then falls back to case-insensitive match so
+    that minor capitalisation differences don't block registration.
+    """
     cur.execute(
         "SELECT programme_id FROM programme WHERE programme_name = %s",
+        (programme_name,),
+    )
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    # Case-insensitive fallback
+    cur.execute(
+        "SELECT programme_id FROM programme WHERE LOWER(programme_name) = LOWER(%s)",
         (programme_name,),
     )
     row = cur.fetchone()

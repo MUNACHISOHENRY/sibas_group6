@@ -16,6 +16,9 @@ from app.api import (
 from app.admin_ops import (
     get_all_lecturers, get_all_courses,
     add_course, get_lecturer_assignments, assign_lecturer,
+    get_all_programmes, get_all_departments,
+    add_department, add_programme,
+    delete_department, delete_programme,
 )
 from app.reports import (
     generate_report, get_threshold, update_threshold, export_csv, export_to_pdf,
@@ -76,13 +79,20 @@ def manage_users(users):
     with col_a:
         with st.expander("Create New User"):
             with st.form("create_user"):
-                new_username = st.text_input("Username")
-                new_password = st.text_input("Password", type="password")
-                new_role = st.selectbox("Role", ["Administrator", "Lecturer", "Student"])
-                new_active = st.checkbox("Active", value=True)
+                new_username  = st.text_input("Username")
+                new_password  = st.text_input("Password", type="password")
+                new_role      = st.selectbox("Role", ["Administrator", "Lecturer", "Student"])
+                new_full_name = st.text_input("Full Name", help="Required for Lecturer accounts")
+                new_email     = st.text_input("Email",     help="Required for Lecturer accounts")
+                new_active    = st.checkbox("Active", value=True)
+                st.caption("To register a Student with full details (matric no., programme, courses), use the **Students** tab instead.")
                 if st.form_submit_button("Create"):
                     try:
-                        create_user(new_username, new_password, new_role, new_active)
+                        create_user(
+                            new_username, new_password, new_role, new_active,
+                            full_name=new_full_name or None,
+                            email=new_email or None,
+                        )
                         st.success("User created")
                     except Exception as e:
                         st.error(str(e))
@@ -158,9 +168,18 @@ def manage_students():
             matric_no = st.text_input("Matric Number")
             full_name = st.text_input("Full Name")
             email     = st.text_input("Email")
-            # Programme is the programme NAME (must already exist in DB).
-            # Department is derived via programme -> NOT collected here.
-            programme = st.text_input("Programme (exact name, e.g. 'BSc Computer Science')")
+            # Programme dropdown — pulled live from DB so the name is always exact.
+            all_programmes = get_all_programmes()
+            if not all_programmes:
+                st.warning("No programmes found in the database. Add a department and programme before registering students.")
+                programme = ""
+            else:
+                prog_options = {p["programme_name"]: p["programme_name"] for p in all_programmes}
+                programme = st.selectbox(
+                    "Programme",
+                    options=list(prog_options.keys()),
+                    format_func=lambda x: x,
+                )
             level     = st.selectbox("Level", [100, 200, 300, 400, 500])
 
             # Login credentials for the new student (required by Script 2).
@@ -386,9 +405,103 @@ def attendance_reports():
 
 def config_page():
     st.subheader("Configuration")
+
+    # ── Attendance threshold ──────────────────────────────────────────────────
     current = get_threshold()
     st.write(f"Current attendance threshold: **{current}%**")
     new_val = st.number_input("New threshold (%)", 0.0, 100.0, current, 1.0)
     if st.button("Update Threshold"):
         update_threshold(new_val)
         st.success("Threshold updated")
+
+    st.divider()
+
+    # ── Departments ───────────────────────────────────────────────────────────
+    st.subheader("Departments")
+    departments = get_all_departments()
+
+    col_dept, col_add_dept = st.columns(2)
+
+    with col_dept:
+        if departments:
+            import pandas as pd
+            dept_df = pd.DataFrame(departments)
+            st.dataframe(dept_df[["department_id", "department_name"]],
+                         use_container_width=True, hide_index=True)
+        else:
+            st.info("No departments yet.")
+
+    with col_add_dept:
+        with st.form("add_department"):
+            st.write("**Add Department**")
+            dept_name = st.text_input("Department Name")
+            if st.form_submit_button("Add"):
+                try:
+                    add_department(dept_name)
+                    st.success(f"Department '{dept_name}' added.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+        if departments:
+            with st.form("delete_department"):
+                st.write("**Delete Department**")
+                dept_options = {d["department_name"]: d["department_id"] for d in departments}
+                dept_to_del = st.selectbox("Select department", list(dept_options.keys()),
+                                           key="del_dept")
+                if st.form_submit_button("Delete"):
+                    try:
+                        delete_department(dept_options[dept_to_del])
+                        st.success(f"Deleted '{dept_to_del}'.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Cannot delete: {e}")
+
+    st.divider()
+
+    # ── Programmes ────────────────────────────────────────────────────────────
+    st.subheader("Programmes")
+    programmes  = get_all_programmes()
+    departments = get_all_departments()   # re-fetch in case one was just added
+
+    col_prog, col_add_prog = st.columns(2)
+
+    with col_prog:
+        if programmes:
+            import pandas as pd
+            prog_df = pd.DataFrame(programmes)
+            st.dataframe(prog_df[["programme_id", "programme_name", "department_name"]],
+                         use_container_width=True, hide_index=True)
+        else:
+            st.info("No programmes yet. Add a department first, then add a programme.")
+
+    with col_add_prog:
+        if not departments:
+            st.warning("Add a department before adding a programme.")
+        else:
+            with st.form("add_programme"):
+                st.write("**Add Programme**")
+                prog_name = st.text_input("Programme Name (e.g. BSc Computer Science)")
+                dept_map  = {d["department_name"]: d["department_id"] for d in departments}
+                selected_dept = st.selectbox("Department", list(dept_map.keys()))
+                if st.form_submit_button("Add"):
+                    try:
+                        add_programme(prog_name, dept_map[selected_dept])
+                        st.success(f"Programme '{prog_name}' added.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+
+        if programmes:
+            with st.form("delete_programme"):
+                st.write("**Delete Programme**")
+                prog_options = {p["programme_name"]: p["programme_id"] for p in programmes}
+                prog_to_del  = st.selectbox("Select programme", list(prog_options.keys()),
+                                            key="del_prog")
+                if st.form_submit_button("Delete"):
+                    try:
+                        delete_programme(prog_options[prog_to_del])
+                        st.success(f"Deleted '{prog_to_del}'.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Cannot delete: {e}")

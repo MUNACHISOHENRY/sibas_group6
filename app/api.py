@@ -105,20 +105,53 @@ def get_all_users():
     ]
 
 
-def create_user(username, password, role, is_active=True):
-    """Create an app_user row directly (used by admin's 'Create User' form)."""
+def create_user(username, password, role, is_active=True, full_name=None, email=None):
+    """
+    Create an app_user row and, for Lecturer role, the matching lecturer row.
+
+    Lecturer accounts require full_name and email so the lecturer table
+    (which the rest of the system queries) gets a complete record.
+    Both inserts run in a single transaction -- if the lecturer insert fails
+    the app_user row is rolled back too.
+    """
     if role not in ("Administrator", "Lecturer", "Student"):
         raise ValueError("Invalid role.")
+    if role == "Lecturer":
+        if not full_name or not str(full_name).strip():
+            raise ValueError("Full name is required for Lecturer accounts.")
+        if not email or "@" not in str(email):
+            raise ValueError("A valid email is required for Lecturer accounts.")
 
+    from app.db import get_connection
     status = "active" if is_active else "inactive"
-    run_command(
-        """
-        INSERT INTO app_user (username, password_hash, role, status)
-        VALUES (%s, %s, %s, %s)
-        """,
-        (username, hash_password(password), role, status),
-    )
-    return True
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_user (username, password_hash, role, status)
+                VALUES (%s, %s, %s, %s)
+                RETURNING user_id
+                """,
+                (username, hash_password(password), role, status),
+            )
+            user_id = cur.fetchone()[0]
+
+            if role == "Lecturer":
+                cur.execute(
+                    """
+                    INSERT INTO lecturer (full_name, email, user_id)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (full_name.strip(), email.strip(), user_id),
+                )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def deactivate_user(user_id):

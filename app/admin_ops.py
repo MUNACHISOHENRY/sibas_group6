@@ -20,6 +20,77 @@ Functions:
 from app.db import run_query, run_command
 
 
+def get_all_programmes() -> list:
+    """
+    Every programme in the system, joined with its department name.
+    Used to populate the programme dropdown when registering a student.
+    """
+    return run_query(
+        """
+        SELECT
+            p.programme_id,
+            p.programme_name,
+            d.department_name
+        FROM   programme p
+        JOIN   department d ON d.department_id = p.department_id
+        ORDER  BY p.programme_name
+        """
+    )
+
+
+def get_all_departments() -> list:
+    """All departments, ordered by name."""
+    return run_query(
+        "SELECT department_id, department_name FROM department ORDER BY department_name"
+    )
+
+
+def add_department(name: str):
+    if not name or not name.strip():
+        raise ValueError("Department name is required.")
+    run_command(
+        "INSERT INTO department (department_name) VALUES (%s)",
+        (name.strip(),),
+    )
+    return True
+
+
+def add_programme(programme_name: str, department_id: int):
+    if not programme_name or not programme_name.strip():
+        raise ValueError("Programme name is required.")
+    if department_id is None:
+        raise ValueError("Department is required.")
+    run_command(
+        "INSERT INTO programme (programme_name, department_id) VALUES (%s, %s)",
+        (programme_name.strip(), int(department_id)),
+    )
+    return True
+
+
+def delete_department(department_id: int):
+    """
+    Deletes a department. Will fail (FK RESTRICT) if any programme still
+    references it -- the caller should catch and surface that error.
+    """
+    run_command(
+        "DELETE FROM department WHERE department_id = %s",
+        (int(department_id),),
+    )
+    return True
+
+
+def delete_programme(programme_id: int):
+    """
+    Deletes a programme. Will fail (FK RESTRICT) if any student is
+    enrolled in it.
+    """
+    run_command(
+        "DELETE FROM programme WHERE programme_id = %s",
+        (int(programme_id),),
+    )
+    return True
+
+
 def get_all_lecturers() -> list:
     """
     Every lecturer with login + profile info.
