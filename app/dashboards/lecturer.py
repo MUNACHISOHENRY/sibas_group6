@@ -1,8 +1,21 @@
 import streamlit as st
 import pandas as pd
 
-# Dummy backend – replace with real imports later
-from backend import *
+# Real backend wiring.
+#   app.api wraps the auth + attendance modules into the names the
+#   dashboards already use (create_session, get_my_sessions, etc.).
+#   app.reports provides the unified generate_report and CSV export.
+from app.api import (
+    get_lecturer_id_from_user_id,
+    get_assigned_courses,
+    create_session,
+    get_my_sessions,
+    upload_attendance,
+    get_session_records,
+    get_students_for_session,
+    override_attendance,
+)
+from app.reports import generate_report, export_csv
 
 def require_role(*roles):
     if "role" not in st.session_state or st.session_state.role not in roles:
@@ -14,7 +27,16 @@ def lecturer_dashboard():
 
     st.title("Lecturer Dashboard")
 
+    # Defensive: a Lecturer-role account without a matching lecturer row
+    # cannot create sessions or own courses. Surface a helpful message
+    # instead of crashing on the next None dereference.
     lect_id = get_lecturer_id_from_user_id(st.session_state["user_id"])
+    if lect_id is None:
+        st.error(
+            "Your account has no lecturer record. "
+            "Ask an administrator to add you to the Lecturer table."
+        )
+        return
 
     tabs = st.tabs(["Create Session", "Upload Attendance", "Override", "Reports"])
 
@@ -28,20 +50,23 @@ def lecturer_dashboard():
         lecturer_reports(lect_id)
 
 def create_session_page(lect_id):
+    """
+    Per BR-19/20 a session is one course on one date. We don't ask for
+    start/end times because the schema doesn't store them -- collecting
+    UI data that vanishes would be dishonest at marking.
+    """
     courses = get_assigned_courses(lect_id)
     if courses:
         with st.form("session"):
             course = st.selectbox(
                 "Course",
                 courses,
-                format_func=lambda x:f'{x["course_code"]} - {x["title"]}'
+                format_func=lambda x: f'{x["course_code"]} - {x["title"]}',
             )
             date = st.date_input("Date")
-            start = st.time_input("Start")
-            end = st.time_input("End")
 
             if st.form_submit_button("Create Session"):
-                create_session(lect_id,course["course_id"],date,start,end)
+                create_session(lect_id, course["course_id"], date)
                 st.success("Session created")
 
 def upload_attendance_page(lect_id):
@@ -61,8 +86,8 @@ def upload_attendance_page(lect_id):
             except:
                 st.error("Invalid CSV")
                 return
-            if list(df.columns) != ["matric_number", "status"]:
-                st.error("CSV must have exactly two columns: matric_number, status")
+            if list(df.columns) != ["matric_no", "status"]:
+                st.error("CSV must have exactly two columns: matric_no, status")
             else:
                 valid = {"Present", "Absent"}
                 if not set(df["status"]).issubset(valid):
@@ -74,26 +99,61 @@ def upload_attendance_page(lect_id):
                         st.json(result["errors"])
 
 def override_page(lect_id):
+    """
+    The override page is the canonical write path for individual
+    attendance changes. It UPSERTs: if a record exists for that
+    (session, student) we update it; if not we create it. So the same
+    form covers "fix a mistake" and "add a missing student".
+    The same backend (mark_attendance) is what the CSV upload uses --
+    one write path, one set of business rules to defend.
+    """
     sessions = get_my_sessions(lect_id)
-    if sessions:
-        sess = st.selectbox(
-            "Select Session",
-            sessions,
-            key="override",
-            format_func=lambda s:f'{s["course_code"]} {s["session_date"]}'
-        )
+    if not sessions:
+        st.info("Create a session first.")
+        return
 
-        records = get_session_records(sess["session_id"])
-        if records:
-            df = pd.DataFrame(records)
-            st.dataframe(df, use_container_width=True)
-            rec_id = st.selectbox("Record ID", [r["record_id"] for r in records])
-            new_status = st.radio("New Status", ["Present","Absent"])
-            if st.button("Override"):
-                override_attendance(rec_id, new_status)
-                st.success("Record updated")
-        else:
-            st.info("No records for this session")
+    sess = st.selectbox(
+        "Select Session",
+        sessions,
+        key="override",
+        format_func=lambda s: f'{s["course_code"]} {s["session_date"]}',
+    )
+
+    # Read-only view of what's already on record.
+    records = get_session_records(sess["session_id"])
+    if records:
+        st.write("**Current records for this session:**")
+        st.dataframe(
+            pd.DataFrame(records)[["matric_no", "full_name", "status"]],
+            use_container_width=True,
+        )
+    else:
+        st.info("No records yet for this session.")
+
+    # Upsert form: pick any enrolled student, set status, save.
+    students = get_students_for_session(sess["session_id"])
+    if not students:
+        st.warning("No students enrolled in this course.")
+        return
+
+    with st.form("override_form"):
+        stu_opts = {
+            s["student_id"]: f'{s["matric_no"]} - {s["full_name"]}'
+            for s in students
+        }
+        stu_id = st.selectbox(
+            "Student",
+            options=list(stu_opts.keys()),
+            format_func=lambda x: stu_opts[x],
+        )
+        new_status = st.radio("Status", ["Present", "Absent"], horizontal=True)
+        if st.form_submit_button("Save"):
+            try:
+                override_attendance(sess["session_id"], stu_id, new_status)
+                st.success("Record saved")
+            except Exception as e:
+                st.error(str(e))
+
 
 def lecturer_reports(lect_id):
     courses = get_assigned_courses(lect_id)
@@ -102,10 +162,12 @@ def lecturer_reports(lect_id):
             "Course",
             courses,
             key="rep_course",
-            format_func=lambda x:f'{x["course_code"]} - {x["title"]}'
+            format_func=lambda x: f'{x["course_code"]} - {x["title"]}',
         )
         if st.button("Generate Report"):
-            report = generate_report(course_id=course["course_code"])
+            # We have the course_code from the dropdown; pass it as
+            # course_code so generate_report doesn't try to cast it to int.
+            report = generate_report(course_code=course["course_code"])
             if report:
                 st.dataframe(pd.DataFrame(report), use_container_width=True)
                 csv_data = export_csv(report)

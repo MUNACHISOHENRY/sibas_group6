@@ -1,8 +1,8 @@
 import streamlit as st
 
-# Dummy backend – will be replaced by real imports later
-import streamlit as st
-from app.auth_wrapper import authenticate      # real authentication now
+# Real authentication via the adapter in app/api.py
+# (replaces the old auth_wrapper.py; same authenticate() contract).
+from app.api import authenticate
 
 def login_section():
     c1,c2,c3 = st.columns([1,1.2,1])

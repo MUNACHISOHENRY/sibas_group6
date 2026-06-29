@@ -6,4 +6,6 @@ psycopg2-binary      # PostgreSQL driver (import name is still "psycopg2")
 python-dotenv        # loads DB credentials from the .env file
 pandas               # reading/handling CSV uploads
 bcrypt               # hashing passwords (never store plain passwords)
-fpdf2                # exporting reports to PDF
+fpdf2                # exporting reports to PDF (legacy)
+reportlab            # PDF generation used by app/reports.py
+plotly               # charts on the admin reports tab

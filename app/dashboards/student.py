@@ -1,7 +1,14 @@
 import streamlit as st
 
-# Dummy backend – replace with real imports later
-from backend import *
+# Real backend wiring.
+#   get_student_profile, get_student_attendance, get_threshold all live
+#   in app/reports.py -- they share the same DB layer and threshold source
+#   as every other report in the system.
+from app.reports import (
+    get_student_profile,
+    get_student_attendance,
+    get_threshold,
+)
 
 def require_role(*roles):
     if "role" not in st.session_state or st.session_state.role not in roles:
@@ -11,7 +18,18 @@ def require_role(*roles):
 def student_dashboard():
     require_role("Student")
 
+    # Defensive: a user with role=Student should always have a matching
+    # student row (Script 2 inserts both together). But if an admin
+    # created a Student account via the Users tab without registering
+    # them, we want a helpful message instead of a crash.
     profile = get_student_profile(st.session_state["user_id"])
+    if profile is None:
+        st.error(
+            "Your account has no student record yet. "
+            "Ask an administrator to complete your registration."
+        )
+        return
+
     attendance = get_student_attendance(profile["student_id"])
     threshold = get_threshold()
 
