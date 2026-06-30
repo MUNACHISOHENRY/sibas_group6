@@ -445,3 +445,229 @@ def override_attendance(session_id: int, student_id: int, new_status: str) -> bo
     )
     return True
 
+
+# ===========================================================================
+# 3.  PROFILE EDITING  (role-aware: students get more fields than lecturers)
+# ===========================================================================
+#
+# These functions update the role-specific table (student / lecturer /
+# administrator). They do NOT touch the app_user row -- that's covered by
+# the rename_user / update_user_role / reset_user_password / reactivate_user
+# functions above.
+
+def get_user_profile_full(user_id):
+    """
+    Fetch the role-appropriate profile for a user, plus base login info.
+
+    Shape:
+        {
+          "user_id":   int,
+          "username":  str,
+          "role":      "Administrator" | "Lecturer" | "Student",
+          "is_active": bool,
+          ...role-specific fields...,
+          "profile_missing": True   (only if there is no matching profile row)
+        }
+
+    Student fields: student_id, matric_no, full_name, email, level,
+                    programme_name, course_codes (list of str).
+    Lecturer fields: lecturer_id, full_name, email.
+    Admin fields: admin_id, full_name, email.
+
+    Used by the admin "Edit profile" form to pre-fill the inputs.
+    """
+    user = run_query_one(
+        "SELECT user_id, username, role, status FROM app_user WHERE user_id = %s",
+        (user_id,),
+    )
+    if user is None:
+        return None
+
+    base = {
+        "user_id":   user["user_id"],
+        "username":  user["username"],
+        "role":      user["role"],
+        "is_active": user["status"] == "active",
+    }
+
+    if user["role"] == "Student":
+        s = run_query_one(
+            """
+            SELECT s.student_id, s.matric_no, s.full_name, s.email, s.level,
+                   p.programme_name
+            FROM   student s
+            JOIN   programme p ON p.programme_id = s.programme_id
+            WHERE  s.user_id = %s
+            """,
+            (user_id,),
+        )
+        if s is None:
+            return {**base, "profile_missing": True}
+        courses = run_query(
+            """
+            SELECT c.course_code
+            FROM   student_course sc
+            JOIN   course c ON c.course_id = sc.course_id
+            WHERE  sc.student_id = %s
+            ORDER  BY c.course_code
+            """,
+            (s["student_id"],),
+        )
+        return {**base, **s, "course_codes": [c["course_code"] for c in courses]}
+
+    if user["role"] == "Lecturer":
+        lec = run_query_one(
+            "SELECT lecturer_id, full_name, email FROM lecturer WHERE user_id = %s",
+            (user_id,),
+        )
+        return {**base, **(lec if lec else {"profile_missing": True})}
+
+    # Administrator
+    adm = run_query_one(
+        "SELECT admin_id, full_name, email FROM administrator WHERE user_id = %s",
+        (user_id,),
+    )
+    return {**base, **(adm if adm else {"profile_missing": True})}
+
+
+def update_student_profile(student_id, full_name=None, email=None,
+                           level=None, programme_name=None):
+    """
+    Update a student's editable fields. Only non-empty values change.
+    programme_name is resolved to programme_id via the programme table.
+    Course enrolments are handled separately by update_student_courses.
+    """
+    fields = []
+    params = []
+
+    if full_name:
+        fields.append("full_name = %s")
+        params.append(full_name.strip())
+    if email:
+        if "@" not in email:
+            raise ValueError("Email looks invalid.")
+        fields.append("email = %s")
+        params.append(email.strip())
+    if level is not None:
+        if int(level) not in (100, 200, 300, 400, 500):
+            raise ValueError("Level must be one of 100, 200, 300, 400, 500.")
+        fields.append("level = %s")
+        params.append(int(level))
+    if programme_name:
+        prog = run_query_one(
+            "SELECT programme_id FROM programme WHERE programme_name = %s",
+            (programme_name,),
+        )
+        if prog is None:
+            raise ValueError(f"Programme '{programme_name}' not found.")
+        fields.append("programme_id = %s")
+        params.append(prog["programme_id"])
+
+    if not fields:
+        return False  # nothing to update
+
+    params.append(int(student_id))
+    sql = "UPDATE student SET " + ", ".join(fields) + " WHERE student_id = %s"
+    run_command(sql, tuple(params))
+    return True
+
+
+def update_lecturer_profile(lecturer_id, full_name=None, email=None):
+    """Update a lecturer's name and/or email. Only non-empty values change."""
+    fields, params = [], []
+    if full_name:
+        fields.append("full_name = %s")
+        params.append(full_name.strip())
+    if email:
+        if "@" not in email:
+            raise ValueError("Email looks invalid.")
+        fields.append("email = %s")
+        params.append(email.strip())
+    if not fields:
+        return False
+    params.append(int(lecturer_id))
+    run_command(
+        "UPDATE lecturer SET " + ", ".join(fields) + " WHERE lecturer_id = %s",
+        tuple(params),
+    )
+    return True
+
+
+def update_administrator_profile(admin_id, full_name=None, email=None):
+    """Update an administrator's name and/or email."""
+    fields, params = [], []
+    if full_name:
+        fields.append("full_name = %s")
+        params.append(full_name.strip())
+    if email:
+        if "@" not in email:
+            raise ValueError("Email looks invalid.")
+        fields.append("email = %s")
+        params.append(email.strip())
+    if not fields:
+        return False
+    params.append(int(admin_id))
+    run_command(
+        "UPDATE administrator SET " + ", ".join(fields) + " WHERE admin_id = %s",
+        tuple(params),
+    )
+    return True
+
+
+def update_student_courses(student_id, course_codes):
+    """
+    Replace a student's course enrolments to match the given list of codes.
+    Adds courses missing from the current set, removes courses no longer
+    selected. Runs as one transaction.
+
+    Returns: {"added": int, "removed": int}
+    """
+    from app.db import get_connection
+
+    course_codes = [c.strip() for c in (course_codes or []) if c and c.strip()]
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Resolve each code -> id, failing fast if any unknown.
+            new_ids = set()
+            for code in course_codes:
+                cur.execute(
+                    "SELECT course_id FROM course WHERE course_code = %s",
+                    (code,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"Course code '{code}' not found.")
+                new_ids.add(row[0])
+
+            # Current enrolments.
+            cur.execute(
+                "SELECT course_id FROM student_course WHERE student_id = %s",
+                (int(student_id),),
+            )
+            current_ids = {r[0] for r in cur.fetchall()}
+
+            to_add    = new_ids - current_ids
+            to_remove = current_ids - new_ids
+
+            for cid in to_remove:
+                cur.execute(
+                    "DELETE FROM student_course "
+                    "WHERE student_id = %s AND course_id = %s",
+                    (int(student_id), cid),
+                )
+            for cid in to_add:
+                cur.execute(
+                    "INSERT INTO student_course (student_id, course_id) "
+                    "VALUES (%s, %s)",
+                    (int(student_id), cid),
+                )
+        conn.commit()
+        return {"added": len(to_add), "removed": len(to_remove)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
