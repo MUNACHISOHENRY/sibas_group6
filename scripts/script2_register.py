@@ -1,46 +1,6 @@
-"""
-script2_register.py  --  Student registration for SIBAS.
+"""Student registration utilities for SIBAS.
 
-This is a named deliverable of the project (Script 2). It supports the two
-registration modes required by the brief, both used by the Administrator:
-
-  1. Individual registration  --  one student at a time
-  2. Bulk registration        --  many students from a CSV upload
-
-Per the brief: every student MUST be assigned to one or more courses at the
-time of registration.
-
-The functions defined here are imported by the Streamlit admin dashboard;
-the same file can also be run from the command line for testing:
-
-    # Bulk import from a CSV
-    python scripts/script2_register.py --csv data/sample_students.csv
-
-    # Single demo registration (uses values from data/test_setup.sql)
-    python scripts/script2_register.py --demo
-
-
-CSV FORMAT
-----------
-Required header row, columns can be in any order:
-
-    matric_no, full_name, email, programme, level, username, password, courses
-
-  - 'programme' is the programme NAME (e.g. "BSc Computer Science"),
-    NOT the id. The programme must already exist in the database.
-  - 'level' must be one of 100, 200, 300, 400, 500.
-  - 'courses' is a SEMICOLON-separated list of course CODES
-    (e.g. "DTS304;CSC310"). Each course must already exist in the database.
-
-
-SECURITY
---------
-  - Passwords are hashed with bcrypt before being stored (never plain text).
-  - Every database write uses parameterised queries -- no string concatenation,
-    no SQL injection possible.
-  - Each student registration is wrapped in a transaction: if any step
-    fails (duplicate matric, missing course, etc.), nothing for that
-    student is saved.
+Supports individual registration and bulk CSV import of students.
 """
 
 import argparse
